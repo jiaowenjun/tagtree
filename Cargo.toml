@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+
+[package]
+name = "tagtree"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Weimo <weimo@weimo.cc>"]
+description = "Hierarchical tag paths and an in-memory tag index for Rust."
+license = "MIT"
+repository = "https://github.com/jiaowenjun/tagtree"
+homepage = "https://github.com/jiaowenjun/tagtree"
+readme = "README.md"
+keywords = ["tag", "tree", "index"]
+categories = ["data-structures"]
+
+[lib]
+name = "tagtree"
+path = "src/lib.rs"
