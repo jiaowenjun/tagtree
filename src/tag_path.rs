@@ -48,10 +48,10 @@ where
     let mut seen = HashSet::new();
 
     for value in values {
-        if let Some(tag) = normalize_tag(value)?
-            && seen.insert(tag.clone())
-        {
-            normalized.push(tag);
+        if let Some(tag) = normalize_tag(value)? {
+            if seen.insert(tag.clone()) {
+                normalized.push(tag);
+            }
         }
     }
 
