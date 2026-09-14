@@ -34,7 +34,7 @@ index.upsert(&42, &["work/rust".into(), "favorite".into()]);
 index.upsert(&7, &["work/rust/async".into()]);
 
 assert_eq!(index.tags(&42), vec!["favorite", "work/rust"]);
-assert_eq!(index.items("work"), Ok(vec![42, 7]));
+assert_eq!(index.items("work").unwrap(), vec![42, 7]);
 
 // Upserting replaces the item's previous assignments.
 index.upsert(&42, &["personal".into()]);
