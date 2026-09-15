@@ -3,10 +3,11 @@ use std::{
     hash::Hash,
 };
 
+use crate::{Error, Result};
+
 use super::{
-    error::{TreeError, TreeResult},
     node::{Node, NodeId},
-    treeview::TreeView,
+    treeview::TagNode,
 };
 
 /// 路径分隔符
@@ -15,77 +16,67 @@ const PATH_SEP: &str = "/";
 pub(crate) const ROOT_ID: NodeId = 0;
 
 #[derive(Debug)]
-/// 一棵用于管理“分层路径 -> 数据项”的树。
+/// A tree that maps slash-separated paths to sets of items.
 ///
-/// `Tree` 主要面向类似“标签/分类”的场景：每个节点对应一个路径片段（如 `"work"`、`"project"`），
-/// 数据项（`T`）可以挂载在任意节点上；同一个数据项也可以同时关联到多个路径。
+/// Each item can be attached to multiple paths. Queries can inspect either the
+/// items directly attached to a node or the union of a complete subtree.
 ///
-/// ## 路径规则
+/// ## Path rules
 ///
-/// - 路径使用 `/` 作为分隔符，例如 `"work/project/urgent"`。
-/// - 路径会按 `/` 拆分，并忽略空片段（例如 `"a//b"` 等价于 `"a/b"`）。
-/// - 空路径 `""` 表示根节点；根节点的路径字符串为 [`Tree::new`] 的 `root_name`。
+/// - Paths use `/` as the separator, for example `"work/project/urgent"`.
+/// - Empty segments are ignored while traversing paths, so `"a//b"` behaves
+///   like `"a/b"`.
+/// - The empty path `""` addresses the root node.
 ///
-/// ## 数据项约束
+/// ## Item requirements
 ///
-/// 当前公开 API 需要 `T: Eq + Hash + Clone`：
-/// - 通过 [`Tree::add_item`] 添加时会对 `T` 做 `clone`（因为同一项可能被挂到多个路径上）。
-/// - 每个节点内部用集合语义存储数据项：重复添加同一项不会产生重复记录。
-pub struct Tree<T> {
+/// `T` must implement `Eq + Hash + Clone` because values are stored in sets and
+/// cloned when one item is attached to more than one path.
+pub struct PathTree<T> {
     arena: Vec<Node<T>>,
     /// (ParentID, ChildName) -> ChildID
     child_index: HashMap<(NodeId, String), NodeId>,
 }
 
 /// 公开 API
-impl<T: Eq + Hash + Clone> Tree<T> {
-    /// 创建一棵新的树，并设置根节点名称。
+impl<T: Eq + Hash + Clone> PathTree<T> {
+    /// Creates an empty path tree with a display label for the root node.
     ///
-    /// `root_name` 仅影响根节点的显示/路径字符串表示：
-    /// - 根节点可用空路径 `""` 访问；
-    /// - 根节点的路径字符串为 `root_name`。
-    pub fn new(root_name: &str) -> Self {
+    /// The root is always addressed by the empty path (`""`); `root_label`
+    /// only affects snapshots.
+    pub fn new(root_label: &str) -> Self {
         Self {
-            arena: vec![Node::new_root(root_name)],
+            arena: vec![Node::new_root(root_label)],
             child_index: HashMap::new(),
         }
     }
 
-    /// 将 `old_path` 对应的节点（含其子树）移动/合并到 `new_path`。
+    /// Moves a complete subtree to `new_path`.
     ///
-    /// 如果 `new_path` 不存在，会自动创建；若 `new_path` 已存在，则会执行“合并”：
-    /// - 把旧节点的所有数据项并入新节点；
-    /// - 对同名子节点递归合并；
-    /// - 其余子节点整体迁移到新节点名下。
+    /// If the destination already exists, the two subtrees are merged.
     ///
     /// # Errors
     ///
-    /// - 当 `old_path` 不存在时返回 [`TreeError::PathError`]。
-    /// - 不能把根节点合并到其它节点。
-    /// - 不能把一个节点合并到它的后代节点上。
-    pub fn move_path(&mut self, old_path: &str, new_path: &str) -> TreeResult<()> {
+    /// Returns an error when `old_path` does not exist, when the root is moved,
+    /// or when a subtree is moved into one of its descendants.
+    pub fn move_subtree(&mut self, old_path: &str, new_path: &str) -> Result<()> {
         let old_node_id = self
             .find_by_path(old_path)
-            .ok_or(TreeError::PathError(format!("路径 {old_path} 不存在")))?;
+            .ok_or_else(|| Error::PathNotFound(old_path.to_string()))?;
         let new_node_id = self.make_by_path(new_path);
         self.merge(old_node_id, new_node_id)
     }
 
-    /// 将 `item` 关联到多个路径上（路径不存在会被自动创建）。
-    ///
-    /// 同一数据项在同一路径下重复添加不会产生重复记录。
-    pub fn add_item(&mut self, item: &T, paths: &[String]) {
+    /// Adds an item to one or more paths, creating missing paths as needed.
+    pub fn add_to_paths(&mut self, item: &T, paths: &[String]) {
         for path in paths {
             let node_id = self.make_by_path(path);
             self.get_node_mut(node_id).add_item(item.clone());
         }
     }
 
-    /// 从多个路径中删除数据项的关联关系。
-    ///
-    /// - 若路径不存在会被忽略（不会报错）。
-    /// - 若该路径下不存在该数据项也不会报错。
-    pub fn delete_item(&mut self, item: &T, paths: &[String]) {
+    /// Removes an item from the listed paths.
+    pub fn remove_from_paths(&mut self, item: &T, paths: &[String]) {
         for path in paths {
             if let Some(node_id) = self.find_by_path(path) {
                 self.get_node_mut(node_id).remove_item(item);
@@ -93,46 +84,38 @@ impl<T: Eq + Hash + Clone> Tree<T> {
         }
     }
 
-    /// 更新数据项的路径：从 `old_paths` 删除，并添加到 `new_paths`。
-    ///
-    /// 该操作等价于依次调用 [`Tree::delete_item`] 与 [`Tree::add_item`]。
-    pub fn move_item(&mut self, item: &T, old_paths: &[String], new_paths: &[String]) {
-        self.delete_item(item, old_paths);
-        self.add_item(item, new_paths);
+    /// Replaces an item's path assignments.
+    pub fn replace_paths(&mut self, item: &T, old_paths: &[String], new_paths: &[String]) {
+        self.remove_from_paths(item, old_paths);
+        self.add_to_paths(item, new_paths);
     }
 
-    /// 获取 `path` 下的所有数据项（包含其所有子节点的集合并集）。
-    ///
-    /// 返回值是对树内部数据项的引用集合，生命周期与 `&self` 绑定。
+    /// Returns the set union of items attached to `path` and all descendants.
     ///
     /// # Errors
     ///
-    /// 当 `path` 不存在时返回 [`TreeError::PathError`]。
-    pub fn get_items(&self, path: &str) -> TreeResult<HashSet<&T>> {
+    /// Returns an error when `path` does not exist.
+    pub fn items_under(&self, path: &str) -> Result<HashSet<&T>> {
         let node_id = self
             .find_by_path(path)
-            .ok_or(TreeError::PathError(format!("路径 {path} 不存在")))?;
+            .ok_or_else(|| Error::PathNotFound(path.to_string()))?;
         Ok(self.get_node_items(node_id))
     }
 
-    /// 获取 `path` 对应节点自身背包中的数据项（不包含子节点）。
-    ///
-    /// 若需子树并集，请使用 [`Tree::get_items`]。
+    /// Returns only the items attached directly to `path`.
     ///
     /// # Errors
     ///
-    /// 当 `path` 不存在时返回 [`TreeError::PathError`]。
-    pub fn get_bag(&self, path: &str) -> TreeResult<HashSet<&T>> {
+    /// Returns an error when `path` does not exist.
+    pub fn items_at(&self, path: &str) -> Result<HashSet<&T>> {
         let node_id = self
             .find_by_path(path)
-            .ok_or(TreeError::PathError(format!("路径 {path} 不存在")))?;
+            .ok_or_else(|| Error::PathNotFound(path.to_string()))?;
         Ok(self.get_node(node_id).iter_bag().collect())
     }
 
-    /// 获取包含指定数据项的所有路径（按字典序排序）。
-    ///
-    /// 如果数据项存在于根节点，则会包含根节点路径（即 `root_name`）。
-    pub fn get_item_paths(&self, item: &T) -> Vec<String> {
+    /// Returns all paths containing `item`, sorted lexicographically.
+    pub fn paths_for(&self, item: &T) -> Vec<String> {
         let mut paths = Vec::new();
         let mut stack = vec![ROOT_ID];
 
@@ -152,11 +135,9 @@ impl<T: Eq + Hash + Clone> Tree<T> {
         paths
     }
 
-    /// 列出所有“非空节点”的路径（按字典序排序）。
-    ///
-    /// 这里的“非空”指该节点自身直接挂载了至少一个数据项；
-    /// 不包含仅因子节点非空而自身为空的节点。
-    pub fn list_paths(&self) -> Vec<String> {
+    /// Lists paths with at least one item directly attached, sorted
+    /// lexicographically.
+    pub fn populated_paths(&self) -> Vec<String> {
         let mut paths = Vec::new();
         let mut stack = vec![ROOT_ID];
 
@@ -175,25 +156,25 @@ impl<T: Eq + Hash + Clone> Tree<T> {
         paths
     }
 
-    /// 构造一个用于展示的 [`TreeView`]。
-    pub fn view(&self) -> TreeView {
-        TreeView::from_tree(self)
+    /// Builds an owned read-only snapshot for presentation.
+    pub fn snapshot(&self) -> TagNode {
+        TagNode::from_tree(self)
     }
 
-    /// 获取根节点自身背包中的数据项数量（不包含子节点）。
-    pub fn root_bag_count(&self) -> usize {
+    /// Returns the number of items attached directly to the root.
+    pub fn root_item_count(&self) -> usize {
         self.get_node(ROOT_ID).iter_bag().count()
     }
 }
 
-impl<T: Eq + Hash + Clone> Default for Tree<T> {
+impl<T: Eq + Hash + Clone> Default for PathTree<T> {
     fn default() -> Self {
         Self::new("root")
     }
 }
 
 /// 内部 API（只读）
-impl<T: Eq + Hash + Clone> Tree<T> {
+impl<T: Eq + Hash + Clone> PathTree<T> {
     /// 获取节点的不可变引用
     pub(crate) fn get_node(&self, node_id: NodeId) -> &Node<T> {
         &self.arena[node_id]
@@ -201,7 +182,11 @@ impl<T: Eq + Hash + Clone> Tree<T> {
 
     /// 获取指定节点的路径字符串
     pub(crate) fn get_node_path(&self, node_id: NodeId) -> String {
-        if self.is_root(node_id) || self.is_root(self.get_parent_id(node_id)) {
+        if self.is_root(node_id) {
+            return String::new();
+        }
+
+        if self.is_root(self.get_parent_id(node_id)) {
             return self.get_node_name(node_id).to_string();
         }
 
@@ -274,7 +259,7 @@ impl<T: Eq + Hash + Clone> Tree<T> {
 }
 
 /// 私有 API（只读）
-impl<T: Eq + Hash + Clone> Tree<T> {
+impl<T: Eq + Hash + Clone> PathTree<T> {
     fn get_node_name(&self, node_id: NodeId) -> &str {
         self.get_node(node_id).name()
     }
@@ -328,7 +313,7 @@ impl<T: Eq + Hash + Clone> Tree<T> {
 }
 
 /// 私有 API
-impl<T: Eq + Hash + Clone> Tree<T> {
+impl<T: Eq + Hash + Clone> PathTree<T> {
     fn get_node_mut(&mut self, node_id: NodeId) -> &mut Node<T> {
         &mut self.arena[node_id]
     }
@@ -374,15 +359,18 @@ impl<T: Eq + Hash + Clone> Tree<T> {
         true
     }
 
-    fn merge(&mut self, src_id: NodeId, target_id: NodeId) -> TreeResult<()> {
+    fn merge(&mut self, src_id: NodeId, target_id: NodeId) -> Result<()> {
         if src_id == target_id {
             return Ok(());
         }
         if self.is_root(src_id) {
-            return Err(TreeError::MergeError("不能合并根节点".to_string()));
+            return Err(Error::CannotMoveRoot);
         }
         if self.is_ancestor(src_id, target_id) {
-            return Err(TreeError::MergeError("不能合并到后代".to_string()));
+            return Err(Error::CannotMoveIntoDescendant {
+                from: self.get_node_path(src_id),
+                to: self.get_node_path(target_id),
+            });
         }
 
         self.unlink(src_id);
@@ -424,225 +412,225 @@ impl<T: Eq + Hash + Clone> Tree<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::treebag::TreeError;
+    use crate::{Error, path_tree::PathTree};
 
     #[test]
     fn test_new_tree() {
-        let tree = Tree::<usize>::new("tags");
-        assert_eq!(tree.list_paths().len(), 0);
+        let tree = PathTree::<usize>::new("tags");
+        assert_eq!(tree.populated_paths().len(), 0);
     }
 
     #[test]
     fn test_default_tree() {
-        let tree: Tree<usize> = Tree::default();
-        assert_eq!(tree.list_paths().len(), 0);
+        let tree: PathTree<usize> = PathTree::default();
+        assert_eq!(tree.populated_paths().len(), 0);
     }
 
     #[test]
     fn test_path_root() {
-        let tree = Tree::<usize>::new("tags");
+        let tree = PathTree::<usize>::new("tags");
         let root_id = 0;
-        assert_eq!(tree.get_node_path(root_id), "tags");
+        assert_eq!(tree.get_node_path(root_id), "");
     }
 
     #[test]
     fn test_path_single_level() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
 
-        let paths = tree.list_paths();
+        let paths = tree.populated_paths();
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], "work");
     }
 
     #[test]
     fn test_path_multi_level() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work/project".to_string()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work/project".to_string()]);
 
-        let paths = tree.list_paths();
+        let paths = tree.populated_paths();
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], "work/project");
     }
 
     #[test]
     fn test_update_path_success() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
 
-        let result = tree.move_path("work", "job");
+        let result = tree.move_subtree("work", "job");
         assert!(result.is_ok());
 
-        let paths = tree.get_item_paths(&1);
+        let paths = tree.paths_for(&1);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], "job");
     }
 
     #[test]
     fn test_update_path_nonexistent() {
-        let mut tree = Tree::<usize>::new("tags");
-        let result = tree.move_path("nonexistent", "newpath");
+        let mut tree = PathTree::<usize>::new("tags");
+        let result = tree.move_subtree("nonexistent", "newpath");
         assert!(result.is_err());
         match result {
-            Err(TreeError::PathError(msg)) => {
-                assert!(msg.contains("nonexistent"));
+            Err(Error::PathNotFound(path)) => {
+                assert_eq!(path, "nonexistent");
             }
-            _ => panic!("Expected PathError"),
+            _ => panic!("Expected PathNotFound"),
         }
     }
 
     #[test]
     fn test_update_path_to_ancestor() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work/project".to_string()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work/project".to_string()]);
 
-        let result = tree.move_path("work/project", "work");
+        let result = tree.move_subtree("work/project", "work");
         assert!(result.is_ok());
 
-        let paths = tree.get_item_paths(&1);
+        let paths = tree.paths_for(&1);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], "work");
     }
 
     #[test]
     fn test_update_path_to_descendant() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&2, &["work/project".to_string()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&2, &["work/project".to_string()]);
 
-        let result = tree.move_path("work", "work/project");
+        let result = tree.move_subtree("work", "work/project");
         assert!(result.is_err());
         match result {
-            Err(TreeError::MergeError(msg)) => {
-                assert!(msg.contains("后代"));
+            Err(Error::CannotMoveIntoDescendant { from, to }) => {
+                assert_eq!(from, "work");
+                assert_eq!(to, "work/project");
             }
-            _ => panic!("Expected MergeError"),
+            _ => panic!("Expected CannotMoveIntoDescendant"),
         }
     }
 
     #[test]
     fn test_update_path_to_root() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
 
-        let result = tree.move_path("work", "");
+        let result = tree.move_subtree("work", "");
         assert!(result.is_ok());
 
-        let paths = tree.get_item_paths(&1);
+        let paths = tree.paths_for(&1);
         assert_eq!(paths.len(), 1);
-        assert_eq!(paths[0], "tags");
+        assert_eq!(paths[0], "");
     }
 
     #[test]
-    fn test_add_item_single_path() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
+    fn test_add_to_paths_single_path() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
 
-        let items = tree.get_items("work").unwrap();
+        let items = tree.items_under("work").unwrap();
         assert_eq!(items.len(), 1);
         assert!(items.contains(&1));
     }
 
     #[test]
-    fn test_add_item_multiple_paths() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string(), "urgent".to_string()]);
+    fn test_add_to_paths_multiple_paths() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string(), "urgent".to_string()]);
 
-        let work_items = tree.get_items("work").unwrap();
+        let work_items = tree.items_under("work").unwrap();
         assert_eq!(work_items.len(), 1);
         assert!(work_items.contains(&1));
 
-        let urgent_items = tree.get_items("urgent").unwrap();
+        let urgent_items = tree.items_under("urgent").unwrap();
         assert_eq!(urgent_items.len(), 1);
         assert!(urgent_items.contains(&1));
     }
 
     #[test]
-    fn test_add_item_creates_path() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work/project/urgent".to_string()]);
+    fn test_add_to_paths_creates_path() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work/project/urgent".to_string()]);
 
-        let paths = tree.list_paths();
+        let paths = tree.populated_paths();
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], "work/project/urgent");
 
-        let items = tree.get_items("work/project/urgent").unwrap();
+        let items = tree.items_under("work/project/urgent").unwrap();
         assert_eq!(items.len(), 1);
         assert!(items.contains(&1));
     }
 
     #[test]
-    fn test_delete_item_single_path() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.delete_item(&1, &["work".to_string()]);
+    fn test_remove_from_paths_single_path() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.remove_from_paths(&1, &["work".to_string()]);
 
-        let items = tree.get_items("work").unwrap();
+        let items = tree.items_under("work").unwrap();
         assert_eq!(items.len(), 0);
     }
 
     #[test]
-    fn test_delete_item_nonexistent_path() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.delete_item(&1, &["nonexistent".to_string()]);
+    fn test_remove_from_paths_nonexistent_path() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.remove_from_paths(&1, &["nonexistent".to_string()]);
 
-        assert_eq!(tree.list_paths().len(), 0);
+        assert_eq!(tree.populated_paths().len(), 0);
     }
 
     #[test]
-    fn test_get_items_success() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&2, &["work".to_string()]);
+    fn test_items_under_success() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&2, &["work".to_string()]);
 
-        let items = tree.get_items("work").unwrap();
+        let items = tree.items_under("work").unwrap();
         assert_eq!(items.len(), 2);
         assert!(items.contains(&1));
         assert!(items.contains(&2));
     }
 
     #[test]
-    fn test_get_items_includes_descendants() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&2, &["work/project".to_string()]);
+    fn test_items_under_includes_descendants() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&2, &["work/project".to_string()]);
 
-        let items = tree.get_items("work").unwrap();
+        let items = tree.items_under("work").unwrap();
         assert_eq!(items.len(), 2);
         assert!(items.contains(&1));
         assert!(items.contains(&2));
     }
 
     #[test]
-    fn test_get_items_nonexistent_path() {
-        let tree = Tree::<usize>::new("tags");
-        let result = tree.get_items("nonexistent");
+    fn test_items_under_nonexistent_path() {
+        let tree = PathTree::<usize>::new("tags");
+        let result = tree.items_under("nonexistent");
         assert!(result.is_err());
         match result {
-            Err(TreeError::PathError(msg)) => {
-                assert!(msg.contains("nonexistent"));
+            Err(Error::PathNotFound(path)) => {
+                assert_eq!(path, "nonexistent");
             }
-            _ => panic!("Expected PathError"),
+            _ => panic!("Expected PathNotFound"),
         }
     }
 
     #[test]
-    fn test_get_item_paths_single() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
+    fn test_paths_for_single() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
 
-        let paths = tree.get_item_paths(&1);
+        let paths = tree.paths_for(&1);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], "work");
     }
 
     #[test]
-    fn test_get_item_paths_multiple() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["b".to_string(), "a".to_string(), "c".to_string()]);
+    fn test_paths_for_multiple() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["b".to_string(), "a".to_string(), "c".to_string()]);
 
-        let paths = tree.get_item_paths(&1);
+        let paths = tree.paths_for(&1);
         assert_eq!(
             paths,
             vec!["a".to_string(), "b".to_string(), "c".to_string()]
@@ -650,87 +638,87 @@ mod tests {
     }
 
     #[test]
-    fn test_get_item_paths_nonexistent() {
-        let tree = Tree::<usize>::new("tags");
-        let paths = tree.get_item_paths(&1);
+    fn test_paths_for_nonexistent() {
+        let tree = PathTree::<usize>::new("tags");
+        let paths = tree.paths_for(&1);
         assert_eq!(paths.len(), 0);
     }
 
     #[test]
     fn test_path_normalization_ignores_empty_segments() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["a//b///c".to_string()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["a//b///c".to_string()]);
 
-        let items = tree.get_items("a/b/c").unwrap();
+        let items = tree.items_under("a/b/c").unwrap();
         assert_eq!(items.len(), 1);
         assert!(items.contains(&1));
 
-        let paths = tree.list_paths();
+        let paths = tree.populated_paths();
         assert_eq!(paths, vec!["a/b/c".to_string()]);
     }
 
     #[test]
-    fn test_move_path_makes_old_path_unreachable() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work//project".to_string()]);
+    fn test_move_subtree_makes_old_path_unreachable() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work//project".to_string()]);
 
-        tree.move_path("work", "job").unwrap();
+        tree.move_subtree("work", "job").unwrap();
 
-        let old = tree.get_items("work");
-        assert!(matches!(old, Err(TreeError::PathError(_))));
+        let old = tree.items_under("work");
+        assert!(matches!(old, Err(Error::PathNotFound(_))));
 
-        let items = tree.get_items("job/project").unwrap();
+        let items = tree.items_under("job/project").unwrap();
         assert_eq!(items.len(), 1);
         assert!(items.contains(&1));
     }
 
     #[test]
-    fn test_move_path_recreate_old_path_does_not_alias() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work/task".to_string()]);
-        tree.add_item(&2, &["job".to_string()]);
+    fn test_move_subtree_recreate_old_path_does_not_alias() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work/task".to_string()]);
+        tree.add_to_paths(&2, &["job".to_string()]);
 
-        tree.move_path("work", "job").unwrap();
+        tree.move_subtree("work", "job").unwrap();
 
-        let old = tree.get_items("work/task");
-        assert!(matches!(old, Err(TreeError::PathError(_))));
+        let old = tree.items_under("work/task");
+        assert!(matches!(old, Err(Error::PathNotFound(_))));
 
-        let job_task = tree.get_items("job/task").unwrap();
+        let job_task = tree.items_under("job/task").unwrap();
         assert_eq!(job_task.len(), 1);
         assert!(job_task.contains(&1));
 
-        tree.add_item(&3, &["work/task".to_string()]);
+        tree.add_to_paths(&3, &["work/task".to_string()]);
 
-        let job_task = tree.get_items("job/task").unwrap();
+        let job_task = tree.items_under("job/task").unwrap();
         assert_eq!(job_task.len(), 1);
         assert!(job_task.contains(&1));
 
-        let work_task = tree.get_items("work/task").unwrap();
+        let work_task = tree.items_under("work/task").unwrap();
         assert_eq!(work_task.len(), 1);
         assert!(work_task.contains(&3));
     }
 
     #[test]
-    fn test_delete_item_nonexistent_item_is_noop() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&2, &["work/project".to_string()]);
+    fn test_remove_from_paths_nonexistent_item_is_noop() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&2, &["work/project".to_string()]);
 
-        tree.delete_item(&99, &["work".to_string(), "work/project".to_string()]);
+        tree.remove_from_paths(&99, &["work".to_string(), "work/project".to_string()]);
 
-        let work = tree.get_items("work").unwrap();
+        let work = tree.items_under("work").unwrap();
         assert_eq!(work.len(), 2);
         assert!(work.contains(&1));
         assert!(work.contains(&2));
     }
 
     #[test]
-    fn test_get_bag_only_returns_current_node_items() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&2, &["work/project".to_string()]);
+    fn test_items_at_only_returns_current_node_items() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&2, &["work/project".to_string()]);
 
-        let work_bag = tree.get_bag("work").unwrap();
+        let work_bag = tree.items_at("work").unwrap();
         assert_eq!(work_bag.len(), 1);
         assert!(work_bag.contains(&1));
         assert!(!work_bag.contains(&2));
@@ -738,22 +726,22 @@ mod tests {
 
     #[test]
     fn test_merge_existing_paths_combines_items_and_children() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&2, &["job".to_string()]);
-        tree.add_item(&3, &["work/project".to_string()]);
-        tree.add_item(&4, &["job/project".to_string()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&2, &["job".to_string()]);
+        tree.add_to_paths(&3, &["work/project".to_string()]);
+        tree.add_to_paths(&4, &["job/project".to_string()]);
 
-        tree.move_path("work", "job").unwrap();
+        tree.move_subtree("work", "job").unwrap();
 
-        let job = tree.get_items("job").unwrap();
+        let job = tree.items_under("job").unwrap();
         assert_eq!(job.len(), 4);
         assert!(job.contains(&1));
         assert!(job.contains(&2));
         assert!(job.contains(&3));
         assert!(job.contains(&4));
 
-        let project = tree.get_items("job/project").unwrap();
+        let project = tree.items_under("job/project").unwrap();
         assert_eq!(project.len(), 2);
         assert!(project.contains(&3));
         assert!(project.contains(&4));
@@ -761,19 +749,19 @@ mod tests {
 
     #[test]
     fn test_root_path_listed_when_root_bag_non_empty() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &[String::new()]);
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &[String::new()]);
 
-        let paths = tree.list_paths();
-        assert_eq!(paths, vec!["tags".to_string()]);
+        let paths = tree.populated_paths();
+        assert_eq!(paths, vec![String::new()]);
     }
 
     #[test]
-    fn test_get_item_paths_returns_root_name_for_root_items() {
-        let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &[String::new()]);
+    fn test_paths_for_returns_root_name_for_root_items() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &[String::new()]);
 
-        let paths = tree.get_item_paths(&1);
-        assert_eq!(paths, vec!["tags".to_string()]);
+        let paths = tree.paths_for(&1);
+        assert_eq!(paths, vec![String::new()]);
     }
 }

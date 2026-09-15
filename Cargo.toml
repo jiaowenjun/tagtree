@@ -3,16 +3,16 @@ resolver = "2"
 
 [package]
 name = "tagtree"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Weimo <weimo@weimo.cc>"]
-description = "Hierarchical tag paths and an in-memory tag index for Rust."
+description = "An in-memory tree for hierarchical tag paths and item assignments."
 license = "MIT"
 repository = "https://github.com/jiaowenjun/tagtree"
 homepage = "https://github.com/jiaowenjun/tagtree"
 readme = "README.md"
-keywords = ["tag", "tree", "index"]
+keywords = ["tag", "tree", "hierarchy"]
 categories = ["data-structures"]
 
 [lib]

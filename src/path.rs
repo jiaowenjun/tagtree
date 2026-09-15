@@ -27,19 +27,17 @@ impl fmt::Display for TagPathError {
 
 impl std::error::Error for TagPathError {}
 
-pub type TagPathResult<T> = Result<T, TagPathError>;
-
-pub fn normalize_tag(value: impl AsRef<str>) -> TagPathResult<Option<String>> {
+pub fn normalize_path(value: impl AsRef<str>) -> Result<Option<String>, TagPathError> {
     let value = value.as_ref().trim();
     if value.is_empty() {
         return Ok(None);
     }
 
-    validate_tag_path(value)?;
+    validate_path(value)?;
     Ok(Some(value.to_string()))
 }
 
-pub fn normalize_tags<I, S>(values: I) -> TagPathResult<Vec<String>>
+pub fn normalize_paths<I, S>(values: I) -> Result<Vec<String>, TagPathError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -48,9 +46,9 @@ where
     let mut seen = HashSet::new();
 
     for value in values {
-        if let Some(tag) = normalize_tag(value)? {
-            if seen.insert(tag.clone()) {
-                normalized.push(tag);
+        if let Some(path) = normalize_path(value)? {
+            if seen.insert(path.clone()) {
+                normalized.push(path);
             }
         }
     }
@@ -58,7 +56,11 @@ where
     Ok(normalized)
 }
 
-pub fn validate_tag_path(value: &str) -> TagPathResult<()> {
+pub fn validate_path(value: &str) -> Result<(), TagPathError> {
+    if value.is_empty() {
+        return Ok(());
+    }
+
     let segments = value.split('/').collect::<Vec<_>>();
     if value.starts_with('/')
         || value.ends_with('/')
@@ -71,7 +73,7 @@ pub fn validate_tag_path(value: &str) -> TagPathResult<()> {
     Ok(())
 }
 
-pub fn is_descendant_or_self(candidate: &str, ancestor: &str) -> bool {
+pub fn is_within(candidate: &str, ancestor: &str) -> bool {
     candidate == ancestor
         || candidate
             .strip_prefix(ancestor)
@@ -83,12 +85,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalize_tag_skips_blank_values() {
-        assert_eq!(normalize_tag("  ").unwrap(), None);
+    fn normalize_path_skips_blank_values() {
+        assert_eq!(normalize_path("  ").unwrap(), None);
     }
 
     #[test]
-    fn validate_tag_path_rejects_empty_segments() {
-        assert_eq!(validate_tag_path("a//b"), Err(TagPathError::new("a//b")));
+    fn validate_path_rejects_empty_segments() {
+        assert_eq!(validate_path("a//b"), Err(TagPathError::new("a//b")));
     }
 }

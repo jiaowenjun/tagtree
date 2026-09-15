@@ -2,30 +2,26 @@ use std::hash::Hash;
 
 use super::{
     node::NodeId,
-    tree::{ROOT_ID, Tree},
+    tree::{PathTree, ROOT_ID},
 };
 
-/// 树视图 (TreeView)
+/// An owned read-only node in a path tree snapshot.
 ///
-/// 用于展示树的层级结构和各节点的数据项统计。
-/// 它是一个只读的视图，通常用于 CLI 输出或 UI 展示。
-pub struct TreeView {
-    /// 节点名称 (例如目录名或标签名)
+/// The node contains descendant item counts and recursively sorted children.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagNode {
+    /// The final path segment.
     pub name: String,
-    /// 节点的全路径 (例如 "work/project")
+    /// The full path from the root.
     pub path: String,
-    /// 该节点及其子节点包含的数据项总数
+    /// Number of unique items at this node or any descendant.
     pub item_count: usize,
-    /// 子节点视图列表
-    pub children: Vec<TreeView>,
+    /// Child nodes sorted by name.
+    pub children: Vec<TagNode>,
 }
 
-impl TreeView {
-    /// 从 Tree 构建一个 TreeView
-    ///
-    /// 从根节点开始遍历整棵树，构建层级视图。
-    /// 如果根节点没有数据项且没有子节点，会返回一个空的视图。
-    pub(crate) fn from_tree<T: Eq + Hash + Clone>(tree: &Tree<T>) -> Self {
+impl TagNode {
+    pub(crate) fn from_tree<T: Eq + Hash + Clone>(tree: &PathTree<T>) -> Self {
         let counts = tree.get_tree_item_counts();
         Self::from_node(tree, ROOT_ID, "", &counts).unwrap_or_else(|| Self {
             name: tree.get_node(ROOT_ID).name().to_string(),
@@ -52,7 +48,7 @@ impl TreeView {
     }
 
     fn from_node<T: Eq + Hash + Clone>(
-        tree: &Tree<T>,
+        tree: &PathTree<T>,
         node_id: NodeId,
         parent_path: &str,
         counts: &[usize],
@@ -71,7 +67,7 @@ impl TreeView {
             format!("{}/{}", parent_path, node.name())
         };
 
-        let mut children: Vec<TreeView> = node
+        let mut children: Vec<TagNode> = node
             .iter_children()
             .filter_map(|&child_id| Self::from_node(tree, child_id, &path, counts))
             .collect();
@@ -122,12 +118,12 @@ impl TreeView {
 
 #[cfg(test)]
 mod tests {
-    use crate::treebag::Tree;
+    use crate::path_tree::PathTree as Tree;
 
     #[test]
     fn test_empty_tree_view() {
         let tree = Tree::<usize>::new("tags");
-        let view = tree.view();
+        let view = tree.snapshot();
 
         assert_eq!(view.name, "tags");
         assert_eq!(view.path, "");
@@ -139,11 +135,11 @@ mod tests {
     fn test_tree_view_structure() {
         let mut tree = Tree::<usize>::new("tags");
 
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&2, &["work/project".to_string()]);
-        tree.add_item(&3, &["personal".to_string()]);
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&2, &["work/project".to_string()]);
+        tree.add_to_paths(&3, &["personal".to_string()]);
 
-        let view = tree.view();
+        let view = tree.snapshot();
 
         assert_eq!(view.name, "tags");
         assert_eq!(view.item_count, 3);
@@ -169,10 +165,10 @@ mod tests {
     #[test]
     fn test_tree_view_deduplication() {
         let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&1, &["work/project".to_string()]);
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&1, &["work/project".to_string()]);
 
-        let view = tree.view();
+        let view = tree.snapshot();
         let work = view.children.iter().find(|c| c.name == "work").unwrap();
 
         assert_eq!(work.item_count, 1);
@@ -184,11 +180,11 @@ mod tests {
     #[test]
     fn test_tree_view_formatting() {
         let mut tree = Tree::<usize>::new("tags");
-        tree.add_item(&1, &["work".to_string()]);
-        tree.add_item(&2, &["work/project".to_string()]);
-        tree.add_item(&3, &["personal".to_string()]);
+        tree.add_to_paths(&1, &["work".to_string()]);
+        tree.add_to_paths(&2, &["work/project".to_string()]);
+        tree.add_to_paths(&3, &["personal".to_string()]);
 
-        let view = tree.view();
+        let view = tree.snapshot();
         let mut buffer = Vec::new();
         view.write(&mut buffer).unwrap();
 
