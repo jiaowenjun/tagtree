@@ -153,7 +153,6 @@ tree with descendant item counts and sorted children. The root label passed to
 ## API reference and license
 
 - [API documentation on docs.rs](https://docs.rs/tagtree)
-- [Migration guide](MIGRATION.md)
 - [Source repository](https://github.com/jiaowenjun/tagtree)
 
 Licensed under the [MIT License](LICENSE).
