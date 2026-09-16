@@ -32,19 +32,19 @@ pub(crate) const ROOT_ID: NodeId = 0;
 ///
 /// `T` must implement `Eq + Hash + Clone` because values are stored in sets and
 /// cloned when one item is attached to more than one path.
-pub struct PathTree<T> {
+pub(crate) struct PathTree<T> {
     arena: Vec<Node<T>>,
     /// (ParentID, ChildName) -> ChildID
     child_index: HashMap<(NodeId, String), NodeId>,
 }
 
-/// 公开 API
+/// Internal path tree storage for [`crate::TagTree`].
 impl<T: Eq + Hash + Clone> PathTree<T> {
     /// Creates an empty path tree with a display label for the root node.
     ///
     /// The root is always addressed by the empty path (`""`); `root_label`
     /// only affects snapshots.
-    pub fn new(root_label: &str) -> Self {
+    pub(crate) fn new(root_label: &str) -> Self {
         Self {
             arena: vec![Node::new_root(root_label)],
             child_index: HashMap::new(),
@@ -59,7 +59,7 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     ///
     /// Returns an error when `old_path` does not exist, when the root is moved,
     /// or when a subtree is moved into one of its descendants.
-    pub fn move_subtree(&mut self, old_path: &str, new_path: &str) -> Result<()> {
+    pub(crate) fn move_subtree(&mut self, old_path: &str, new_path: &str) -> Result<()> {
         let old_node_id = self
             .find_by_path(old_path)
             .ok_or_else(|| Error::PathNotFound(old_path.to_string()))?;
@@ -68,7 +68,7 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     }
 
     /// Adds an item to one or more paths, creating missing paths as needed.
-    pub fn add_to_paths(&mut self, item: &T, paths: &[String]) {
+    pub(crate) fn add_to_paths(&mut self, item: &T, paths: &[String]) {
         for path in paths {
             let node_id = self.make_by_path(path);
             self.get_node_mut(node_id).add_item(item.clone());
@@ -76,7 +76,7 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     }
 
     /// Removes an item from the listed paths.
-    pub fn remove_from_paths(&mut self, item: &T, paths: &[String]) {
+    pub(crate) fn remove_from_paths(&mut self, item: &T, paths: &[String]) {
         for path in paths {
             if let Some(node_id) = self.find_by_path(path) {
                 self.get_node_mut(node_id).remove_item(item);
@@ -85,7 +85,7 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     }
 
     /// Replaces an item's path assignments.
-    pub fn replace_paths(&mut self, item: &T, old_paths: &[String], new_paths: &[String]) {
+    pub(crate) fn replace_paths(&mut self, item: &T, old_paths: &[String], new_paths: &[String]) {
         self.remove_from_paths(item, old_paths);
         self.add_to_paths(item, new_paths);
     }
@@ -95,27 +95,15 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     /// # Errors
     ///
     /// Returns an error when `path` does not exist.
-    pub fn items_under(&self, path: &str) -> Result<HashSet<&T>> {
+    pub(crate) fn items_under(&self, path: &str) -> Result<HashSet<&T>> {
         let node_id = self
             .find_by_path(path)
             .ok_or_else(|| Error::PathNotFound(path.to_string()))?;
         Ok(self.get_node_items(node_id))
     }
 
-    /// Returns only the items attached directly to `path`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `path` does not exist.
-    pub fn items_at(&self, path: &str) -> Result<HashSet<&T>> {
-        let node_id = self
-            .find_by_path(path)
-            .ok_or_else(|| Error::PathNotFound(path.to_string()))?;
-        Ok(self.get_node(node_id).iter_bag().collect())
-    }
-
     /// Returns all paths containing `item`, sorted lexicographically.
-    pub fn paths_for(&self, item: &T) -> Vec<String> {
+    pub(crate) fn paths_for(&self, item: &T) -> Vec<String> {
         let mut paths = Vec::new();
         let mut stack = vec![ROOT_ID];
 
@@ -137,7 +125,7 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
 
     /// Lists paths with at least one item directly attached, sorted
     /// lexicographically.
-    pub fn populated_paths(&self) -> Vec<String> {
+    pub(crate) fn populated_paths(&self) -> Vec<String> {
         let mut paths = Vec::new();
         let mut stack = vec![ROOT_ID];
 
@@ -157,12 +145,12 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     }
 
     /// Builds an owned read-only snapshot for presentation.
-    pub fn snapshot(&self) -> TagNode {
+    pub(crate) fn snapshot(&self) -> TagNode {
         TagNode::from_tree(self)
     }
 
     /// Returns the number of items attached directly to the root.
-    pub fn root_item_count(&self) -> usize {
+    pub(crate) fn root_item_count(&self) -> usize {
         self.get_node(ROOT_ID).iter_bag().count()
     }
 }
@@ -710,18 +698,6 @@ mod tests {
         assert_eq!(work.len(), 2);
         assert!(work.contains(&1));
         assert!(work.contains(&2));
-    }
-
-    #[test]
-    fn test_items_at_only_returns_current_node_items() {
-        let mut tree = PathTree::<usize>::new("tags");
-        tree.add_to_paths(&1, &["work".to_string()]);
-        tree.add_to_paths(&2, &["work/project".to_string()]);
-
-        let work_bag = tree.items_at("work").unwrap();
-        assert_eq!(work_bag.len(), 1);
-        assert!(work_bag.contains(&1));
-        assert!(!work_bag.contains(&2));
     }
 
     #[test]

@@ -23,17 +23,16 @@
 //! Untagged `TagTree` items are kept at the empty root path and can be queried
 //! with `items_under("")`.
 //!
-//! Use [`path_tree::PathTree`] when you need lower-level control over adding,
-//! removing, moving, and inspecting path membership. The [`path`] module
-//! provides path validation and normalization helpers for external input.
+//! The [`path`] module provides path validation and normalization helpers for
+//! external input.
 
 mod error;
 mod tag_tree;
 
 pub mod path;
-pub mod path_tree;
+mod path_tree;
 
 pub use error::{Error, Result};
 pub use path::{TagPathError, is_within, normalize_path, normalize_paths, validate_path};
-pub use path_tree::{PathTree, TagNode};
+pub use path_tree::TagNode;
 pub use tag_tree::{ItemTags, TagTree, TagTreeSummary};

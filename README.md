@@ -33,7 +33,7 @@ Add the published crate to your application:
 
 ```toml
 [dependencies]
-tagtree = "0.2"
+tagtree = "0.3"
 ```
 
 The crate requires Rust 1.85 or newer.
@@ -116,39 +116,6 @@ assert_eq!(paths, vec!["math", "math/algebra"]);
 `normalize_path` handles one value and returns `None` for blank input.
 `validate_path` checks one path without changing it. `is_within` tests whether
 one path is a descendant of another path, including equality.
-
-## Advanced: `PathTree`
-
-[`PathTree`](https://docs.rs/tagtree/latest/tagtree/path_tree/struct.PathTree.html)
-is the lower-level structure behind `TagTree`. Use it when the application
-needs to control path membership directly:
-
-```rust
-use tagtree::path_tree::PathTree;
-
-fn main() -> Result<(), tagtree::Error> {
-    let mut tree = PathTree::<u64>::new("tags");
-    tree.add_to_paths(&1, &["work/rust".into()]);
-    tree.add_to_paths(&2, &["work/rust/async".into()]);
-
-    let all_under_work = tree.items_under("work")?;
-    let only_at_rust = tree.items_at("work/rust")?;
-    assert_eq!(all_under_work.len(), 2);
-    assert_eq!(only_at_rust.len(), 1);
-
-    let snapshot = tree.snapshot();
-    assert_eq!(snapshot.path, "");
-    assert_eq!(snapshot.item_count, 2);
-
-    Ok(())
-}
-```
-
-`items_under` returns the set union for a node and all descendants. `items_at`
-returns only items attached directly to that node. `snapshot` returns a
-read-only [`TagNode`](https://docs.rs/tagtree/latest/tagtree/struct.TagNode.html)
-tree with descendant item counts and sorted children. The root label passed to
-`PathTree::new` affects display only; the root path remains `""`.
 
 ## API reference and license
 
