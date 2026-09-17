@@ -7,6 +7,8 @@
 - `main` 是可发布分支；公共 API、README、`MIGRATION.md`、rustdoc 和测试保持同步。
 - 版本号以 `Cargo.toml` 的 `[package].version` 为准，并同步检查 `Cargo.lock`。
 - 遵循 SemVer；公共 API 变化必须在 `MIGRATION.md` 和示例中说明。
+- 公开枚举新增变体会破坏下游穷尽 `match`（源码级破坏），至少随 minor
+  版本发布，不得进入 patch 版本；长期可考虑 `#[non_exhaustive]`。
 - 已发布版本的远端 tag 不得重写或强制移动，crates.io 版本不得重复上传。
 
 ## 发布规则

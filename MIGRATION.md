@@ -2,12 +2,17 @@
 
 ## 0.3.1
 
-Behavior fixes with no breaking API changes:
+Bug fixes. Two of them are visible to downstream code, so this release is not
+source-compatible for every consumer:
 
-- `remove_subtree("")` now returns `Error::CannotRemoveRoot`. Previously it
-  returned every item as affected while changing nothing: untagged items live
-  at the root path, so removing the root subtree is ambiguous. Clear tags per
-  item instead.
+- `Error` gained the `CannotRemoveRoot` variant. `Error` can be matched
+  exhaustively, so downstream `match` expressions without a wildcard arm stop
+  compiling until a new arm is added. New `Error` variants will ship in minor
+  releases, not patch releases.
+- `remove_subtree("")` now returns `Err(Error::CannotRemoveRoot)`. Previously it
+  returned `Ok` with every item listed as affected while changing nothing:
+  untagged items live at the root path, so removing the root subtree is
+  ambiguous. Clear tags per item instead.
 - `move_subtree` no longer creates the destination path when the move is
   rejected (`CannotMoveRoot`, `CannotMoveIntoDescendant`). A rejected call now
   leaves the tree unchanged; previously the destination chain became queryable
