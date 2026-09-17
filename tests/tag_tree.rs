@@ -1,4 +1,4 @@
-use tagtree::{ItemTags, TagTree};
+use tagtree::{Error, ItemTags, TagTree};
 
 fn tags(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
@@ -121,4 +121,49 @@ fn set_tags_rejects_invalid_paths_without_changing_the_item() {
 
     assert!(tree.set_tags(&1, ["/invalid"]).is_err());
     assert_eq!(tree.tags_for(&1), tags(&["work/rust"]));
+}
+
+#[test]
+fn move_subtree_rejection_leaves_the_tree_unchanged() {
+    let mut index = TagTree::new();
+    index.set_tags(&1, tags(&["work"])).unwrap();
+    index.set_tags(&2, tags(&["work/rust"])).unwrap();
+
+    assert!(matches!(
+        index.move_subtree("work", "work/rust/deep").unwrap_err(),
+        Error::CannotMoveIntoDescendant { .. }
+    ));
+    for path in ["work/rust/deep", "work/rust/deep/x"] {
+        assert!(matches!(
+            index.items_under(path),
+            Err(Error::PathNotFound(_))
+        ));
+    }
+
+    assert!(matches!(
+        index.move_subtree("", "other").unwrap_err(),
+        Error::CannotMoveRoot
+    ));
+    assert!(matches!(
+        index.items_under("other"),
+        Err(Error::PathNotFound(_))
+    ));
+
+    assert_eq!(index.items_under("work").unwrap(), vec![2, 1]);
+    assert_eq!(index.tags_for(&1), tags(&["work"]));
+    assert_eq!(index.tags_for(&2), tags(&["work/rust"]));
+}
+
+#[test]
+fn remove_subtree_rejects_root_without_changing_items() {
+    let mut index = TagTree::new();
+    index.set_tags(&1, tags(&["work"])).unwrap();
+    index.set_tags(&2, std::iter::empty::<&str>()).unwrap();
+
+    assert!(matches!(
+        index.remove_subtree("").unwrap_err(),
+        Error::CannotRemoveRoot
+    ));
+    assert_eq!(index.tags_for(&1), tags(&["work"]));
+    assert_eq!(index.items_under("").unwrap(), vec![2, 1]);
 }

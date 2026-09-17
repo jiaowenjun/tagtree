@@ -96,7 +96,10 @@ fn main() -> Result<(), tagtree::Error> {
 The returned [`ItemTags`](https://docs.rs/tagtree/latest/tagtree/struct.ItemTags.html)
 values contain each affected item and its resulting tags, which is useful for
 updating a database or UI. Removing an unknown item with `remove_item` is a
-no-op; unknown paths return `Error::PathNotFound`.
+no-op; unknown paths return `Error::PathNotFound`. A rejected mutation leaves
+the tree unchanged. `remove_subtree("")` returns `Error::CannotRemoveRoot`
+because untagged items live at the root path; `move_subtree` uses `""` as the
+destination to strip the leading segment.
 
 ## Paths
 
@@ -115,7 +118,8 @@ assert_eq!(paths, vec!["math", "math/algebra"]);
 
 `normalize_path` handles one value and returns `None` for blank input.
 `validate_path` checks one path without changing it. `is_within` tests whether
-one path is a descendant of another path, including equality.
+one path is a descendant of another path, including equality; the empty path
+is the root and contains every path.
 
 ## API reference and license
 

@@ -16,3 +16,11 @@ fn within_match_is_segment_aware() {
     assert!(is_within("math/algebra", "math"));
     assert!(!is_within("mathematics", "math"));
 }
+
+#[test]
+fn within_treats_empty_ancestor_as_root() {
+    assert!(is_within("", ""));
+    assert!(is_within("math", ""));
+    assert!(is_within("math/algebra", ""));
+    assert!(!is_within("", "math"));
+}

@@ -15,6 +15,21 @@ const PATH_SEP: &str = "/";
 /// 根节点索引
 pub(crate) const ROOT_ID: NodeId = 0;
 
+/// 判断 `candidate` 是否为 `ancestor` 的严格后代路径。
+/// 与 `find_by_path`/`make_by_path` 一致地忽略空段，保证字符串判定与树结构判定等价。
+fn is_descendant_path(candidate: &str, ancestor: &str) -> bool {
+    let mut candidate_segments = candidate.split(PATH_SEP).filter(|s| !s.is_empty());
+    let mut ancestor_segments = ancestor.split(PATH_SEP).filter(|s| !s.is_empty());
+
+    loop {
+        match (ancestor_segments.next(), candidate_segments.next()) {
+            (Some(ancestor_seg), Some(candidate_seg)) if ancestor_seg == candidate_seg => {}
+            (None, Some(_)) => return true,
+            _ => return false,
+        }
+    }
+}
+
 #[derive(Debug)]
 /// A tree that maps slash-separated paths to sets of items.
 ///
@@ -58,11 +73,22 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     /// # Errors
     ///
     /// Returns an error when `old_path` does not exist, when the root is moved,
-    /// or when a subtree is moved into one of its descendants.
+    /// or when a subtree is moved into one of its descendants. All checks run
+    /// before any node is created, so a rejected move leaves the tree
+    /// unchanged.
     pub(crate) fn move_subtree(&mut self, old_path: &str, new_path: &str) -> Result<()> {
         let old_node_id = self
             .find_by_path(old_path)
             .ok_or_else(|| Error::PathNotFound(old_path.to_string()))?;
+        if old_node_id == ROOT_ID {
+            return Err(Error::CannotMoveRoot);
+        }
+        if is_descendant_path(new_path, old_path) {
+            return Err(Error::CannotMoveIntoDescendant {
+                from: old_path.to_string(),
+                to: new_path.to_string(),
+            });
+        }
         let new_node_id = self.make_by_path(new_path);
         self.merge(old_node_id, new_node_id)
     }
@@ -739,5 +765,35 @@ mod tests {
 
         let paths = tree.paths_for(&1);
         assert_eq!(paths, vec![String::new()]);
+    }
+
+    #[test]
+    fn test_move_subtree_rejection_creates_no_path() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work".to_string()]);
+
+        assert!(tree.move_subtree("work", "work/sub/deep").is_err());
+        assert!(matches!(
+            tree.items_under("work/sub/deep"),
+            Err(Error::PathNotFound(_))
+        ));
+
+        assert!(tree.move_subtree("", "other").is_err());
+        assert!(matches!(
+            tree.items_under("other"),
+            Err(Error::PathNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn test_move_subtree_allows_ancestor_and_self() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["work/project".to_string()]);
+
+        tree.move_subtree("work/project", "work").unwrap();
+        assert_eq!(tree.paths_for(&1), vec!["work".to_string()]);
+
+        tree.move_subtree("work", "work").unwrap();
+        assert_eq!(tree.paths_for(&1), vec!["work".to_string()]);
     }
 }

@@ -73,7 +73,13 @@ pub fn validate_path(value: &str) -> Result<(), TagPathError> {
     Ok(())
 }
 
+/// Returns whether `candidate` equals `ancestor` or lies below it.
+///
+/// The empty path is the root and contains every path.
 pub fn is_within(candidate: &str, ancestor: &str) -> bool {
+    if ancestor.is_empty() {
+        return true;
+    }
     candidate == ancestor
         || candidate
             .strip_prefix(ancestor)

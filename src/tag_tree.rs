@@ -1,7 +1,7 @@
 use std::hash::Hash;
 
 use crate::{
-    error::Result,
+    error::{Error, Result},
     path::{normalize_paths, validate_path},
     path_tree::{PathTree, TagNode},
 };
@@ -106,8 +106,14 @@ impl<T: Eq + Hash + Clone + Ord> TagTree<T> {
     }
 
     /// Removes a tag subtree while preserving unrelated tags.
+    ///
+    /// The root path `""` is rejected because untagged items live there and
+    /// removing the root subtree is ambiguous.
     pub fn remove_subtree(&mut self, path: &str) -> Result<Vec<ItemTags<T>>> {
         validate_path(path)?;
+        if path.is_empty() {
+            return Err(Error::CannotRemoveRoot);
+        }
         let affected_items = self.items_under(path)?;
         let descendant_prefix = format!("{path}/");
 

@@ -11,6 +11,8 @@ pub enum Error {
     PathNotFound(String),
     /// The root node cannot be moved into another path.
     CannotMoveRoot,
+    /// The root path cannot be removed as a subtree.
+    CannotRemoveRoot,
     /// A path cannot be moved into one of its own descendants.
     CannotMoveIntoDescendant { from: String, to: String },
 }
@@ -21,6 +23,7 @@ impl fmt::Display for Error {
             Self::InvalidPath(error) => error.fmt(f),
             Self::PathNotFound(path) => write!(f, "path not found: {path}"),
             Self::CannotMoveRoot => write!(f, "cannot move the root path"),
+            Self::CannotRemoveRoot => write!(f, "cannot remove the root path"),
             Self::CannotMoveIntoDescendant { from, to } => {
                 write!(f, "cannot move {from} into its descendant {to}")
             }
