@@ -1,102 +1,138 @@
 # Roadmap
 
-`tagtree` aims to be a focused, dependable in-memory index for hierarchical
-tags. The crate should hide tree maintenance behind a small `TagTree`
-interface, behave predictably under mixed updates, and publish performance
-claims only when they are backed by reproducible measurements.
+`tagtree` is a focused in-memory index for hierarchical tags. Its intended
+feature set is deliberately small: assign tags, query items and subtrees,
+move or remove subtrees, and inspect a read-only summary.
 
-This roadmap describes direction, not a promise of dates. Each release is
-gated by tests, documentation, SemVer review, and measurements relevant to the
-change.
+Version 0.4 establishes that scope. After 0.4, development is maintenance
+oriented: make the existing behavior more dependable, faster, easier to
+diagnose, and harder to regress. This roadmap does not plan feature growth or
+promise release dates.
 
-## Current main
+## Maintenance principles
+
+Priorities are evaluated in this order:
+
+1. Correctness and failure atomicity come before performance.
+2. Existing public behavior and SemVer compatibility come before convenience.
+3. Performance changes require reproducible measurements and must preserve
+   correctness invariants.
+4. New implementation machinery must remove more complexity than it adds.
+5. Documentation, tests, and benchmarks are part of the maintained contract.
+
+The public API should remain small and stable. Future releases may clarify
+errors, fix incorrect behavior, or optimize internals, but should not add new
+product capabilities.
+
+## Current main: 0.4.0 candidate
 
 The latest published release is 0.3.1. The current `main` branch is preparing
-0.4.0 and supports:
+0.4.0 with:
 
-- assigning a complete tag set to an item;
-- querying an item or a complete subtree;
-- moving, merging, and removing subtrees;
-- presenting a read-only tree summary;
-- constant-time expected item membership and count inspection;
-- item-to-path lookup without a complete tree scan;
-- pruning empty paths and reusing detached arena slots;
-- deterministic owned results;
-- Rust 1.88 and newer.
+- a non-exhaustive public error type and preserved error sources;
+- stricter rejection of visually ambiguous paths;
+- deterministic ascending result order;
+- an internal item-to-node reverse index;
+- pruning and reuse of detached arena nodes;
+- constant-time expected item count and membership inspection;
+- a stateful reference-model test and regression coverage for known bugs;
+- Criterion workloads for construction, queries, updates, churn, snapshots,
+  and subtree mutations;
+- CI coverage for Rust 1.88, stable Rust, rustdoc, benchmark compilation, and
+  SemVer checks.
 
-The public interface is exercised by worked examples, regression tests, and a
-stateful reference-model test. Criterion benchmarks cover both shared
-taxonomies and wide trees. Performance numbers are not yet a stable contract.
+The 0.4 exit criteria are synchronized public documentation, migration notes
+for every observable behavior change, no known violation of mutation failure
+atomicity, and passing release checks on the minimum and stable toolchains.
 
-## 0.4: Contract and lifecycle hardening
+## After 0.4: maintenance-only evolution
 
-Goal: remove ambiguous behavior before more callers depend on it.
+### P0: Correctness and bug prevention
 
-Included in the 0.4.0 candidate:
+- Treat every reported bug as a regression-test opportunity.
+- Keep node relationships, path lookup, direct assignments, reverse-index
+  assignments, and summary counts consistent after every mutation.
+- Verify that rejected operations never leave paths, assignments, or recycled
+  arena slots in a partially changed state.
+- Expand state-model operation sequences and adversarial cases when they expose
+  a real gap in existing coverage.
+- Prefer small, auditable fixes over broad internal redesigns.
 
-- Keep public error enums `#[non_exhaustive]` and document downstream matching.
-- Reject whitespace-padded segments while preserving spaces inside names.
-- Prune empty paths and reuse detached arena nodes so long-running update
-  workloads track live state instead of historical churn.
-- Maintain an internal item-to-node reverse index and verify it against an
-  independent state model.
-- Return items in deterministic ascending order. Retain the `Ord` requirement
-  rather than expose hash iteration order through the public interface.
-- Keep common inspection operations (`len`, `is_empty`, and `contains_item`)
-  on the existing `TagTree` interface rather than exposing storage internals.
-- Add automated SemVer comparison against the latest published release.
+### P1: Error behavior and compatibility
 
-Exit criteria: every behavior change has migration guidance; stateful tests
-cover the new invariants; benchmarks include update-heavy and churn-heavy
-workloads; no known mutation violates failure atomicity.
+- Keep errors deterministic, inspectable through the standard error chain, and
+  specific enough to diagnose invalid input or rejected mutations.
+- Preserve state on every error path and test that property explicitly.
+- Add or refine error cases only when existing behavior is ambiguous; avoid an
+  ever-growing error taxonomy.
+- Review public API and behavior changes with SemVer tooling and document every
+  caller-visible difference in `MIGRATION.md`.
+- Raise the MSRV only deliberately, with a documented benefit and CI coverage.
 
-## 0.5: Scale and memory
+### P2: Performance and memory predictability
 
-Goal: make cost predictable for larger, long-lived indexes.
+- Maintain benchmarks for shared, wide, deep, and churn-heavy taxonomies.
+- Track scaling against item count, live path count, assignment count, subtree
+  size, and tags per item instead of relying on one headline number.
+- Measure latency, allocations, peak memory, and arena reuse where the tooling
+  is reliable enough to reproduce results.
+- Optimize only after a benchmark identifies a meaningful bottleneck; require
+  the state model and regression suite to remain unchanged or stronger.
+- Keep the ordinary dependency tree empty unless a dependency provides a
+  measured maintenance or performance benefit that outweighs its cost.
 
-- Measure item count and path count independently instead of treating tree size
-  as one number.
-- Measure and tune the reverse index's memory overhead under realistic tag
-  counts per item.
-- Add bulk construction and update operations when they reduce repeated scans
-  without enlarging the ordinary interface unnecessarily.
-- Measure peak memory and detached-node churn in addition to elapsed time.
-- Investigate borrowed or iterator-based query results where they provide a
-  material benefit without exposing internal storage.
+### P3: Test and benchmark quality
 
-Exit criteria: documented complexity expectations, reproducible results at
-representative sizes, and no optimization that weakens correctness tests.
+- Keep worked examples, public contract tests, internal algorithm tests, and
+  the independent reference model aligned with the same semantics.
+- Increase property-test cases in scheduled or release validation while
+  keeping ordinary local runs fast.
+- Add targeted fuzzing or interpreter-based checks only when they protect an
+  identified risk in path parsing or mutation logic.
+- Keep benchmark fixtures deterministic and document hardware, toolchain, and
+  commands with any published comparison.
+- Compile benchmarks in shared CI; use stable, dedicated hardware before
+  introducing performance thresholds.
 
-## 0.6: Integration readiness
+### P4: Release and documentation reliability
 
-Goal: make adoption and upgrades routine for downstream applications.
+- Keep README examples, rustdoc, complexity notes, tests, and migration
+  guidance synchronized with shipped behavior.
+- Continue minimum-toolchain and stable-toolchain validation, rustdoc warning
+  checks, SemVer comparison, package inspection, and publish dry-runs.
+- Publish only when the GitHub tag, workflow result, and crates.io version can
+  be independently verified.
+- Keep maintenance policies concise enough that contributors can execute them
+  consistently.
 
-- Evaluate optional serialization for public snapshots and mutation results;
-  do not serialize internal arena layout.
-- Add fuzzing for path parsing and mutation sequences, plus Miri runs for the
-  supported toolchain where useful.
-- Publish complete examples for rebuilding an index from application data and
-  applying returned `ItemTags` updates transactionally.
-- Document feature policy, MSRV policy, security reporting, and support scope.
+## 1.0 readiness
 
-Exit criteria: a new user can evaluate fit, integrate the crate, upgrade it,
-and diagnose performance without reading the implementation.
+Version 1.0 is a stability milestone, not a feature milestone. It requires:
 
-## 1.0: Stable contract
+- a settled path, ordering, mutation, and error contract;
+- no known correctness defects in supported operations;
+- sustained regression and state-model coverage across maintenance releases;
+- documented and reproducible performance characteristics;
+- demonstrated upgrade and SemVer discipline; and
+- evidence from real downstream use that the existing scope is sufficient.
 
-`1.0` requires a settled path model, error model, ordering contract, complexity
-documentation, and at least one release cycle of downstream use after the last
-breaking interface change. It also requires clean SemVer checks, sustained
-model/fuzz coverage, and published benchmark methodology.
+No feature is waiting for 1.0. If those conditions are met, the current small
+interface can become the stable interface.
 
-## Non-goals
+## Permanently out of scope
 
-`tagtree` will not become a database, full-text search engine, authorization
-system, UI tree widget, or async runtime abstraction. Applications own durable
-storage and synchronization. Keeping those concerns outside the module lets
-the in-memory tag interface stay small and useful.
+The roadmap does not include serialization support, persistence, storage
+backends, import/export formats, async APIs, concurrent mutation, full-text
+search, authorization, query languages, UI components, or framework adapters.
+It also does not plan bulk, borrowed, iterator, or convenience variants of the
+existing operations merely to expand the API surface.
 
-Feedback and workload reports are welcome through
+Applications own durable storage, serialization, synchronization, and domain
+policy. Keeping those responsibilities outside `tagtree` is how the crate
+remains understandable and dependable.
+
+Feedback is welcome through
 [GitHub issues](https://github.com/jiaowenjun/tagtree/issues). Reports are most
-useful when they include item count, distinct path count, average tags per
-item, update/query ratio, and a minimal example.
+useful when they include a minimal reproduction or benchmark, the Rust and
+crate versions, item and path counts, tags per item, taxonomy shape, and the
+expected versus observed result.
