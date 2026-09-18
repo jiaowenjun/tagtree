@@ -3,9 +3,9 @@ resolver = "2"
 
 [package]
 name = "tagtree"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["Weimo <weimo@weimo.cc>"]
 description = "An in-memory tree for hierarchical tag paths and item assignments."
 license = "MIT"
@@ -18,3 +18,11 @@ categories = ["data-structures"]
 [lib]
 name = "tagtree"
 path = "src/lib.rs"
+
+[dev-dependencies]
+criterion = "0.8.2"
+proptest = "1.11"
+
+[[bench]]
+name = "tag_tree"
+harness = false

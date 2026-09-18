@@ -30,6 +30,8 @@ GitHub 的 `vX.Y.Z` annotated tag 是唯一发布入口。推送 tag 后，
    cargo fmt --all -- --check
    cargo test --locked
    cargo clippy --all-targets --locked -- -D warnings
+   RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+   cargo bench --no-run --locked
    cargo package --locked
    cargo publish --dry-run --locked
    git diff --check
@@ -57,7 +59,9 @@ GitHub 的 `vX.Y.Z` annotated tag 是唯一发布入口。推送 tag 后，
    version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
    git ls-remote --tags origin "refs/tags/v${version}" "refs/tags/v${version}^{}"
    test "$(git rev-parse "v${version}^{commit}")" = "$(git rev-parse HEAD)"
-   curl --fail --silent --show-error "https://crates.io/api/v1/crates/tagtree" \
+   curl --fail --silent --show-error \
+     --user-agent "tagtree-release-check/1.0 (+https://github.com/jiaowenjun/tagtree)" \
+     "https://crates.io/api/v1/crates/tagtree" \
      | jq -r '.crate.max_version'
    test -z "$(git status --porcelain)"
    ```

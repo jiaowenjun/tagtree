@@ -1,5 +1,32 @@
 # Migration Guide
 
+## 0.4.0
+
+- The minimum supported Rust version is now 1.88.
+- `Error` is now `#[non_exhaustive]`. Downstream matches must include a wildcard
+  arm, allowing future error variants to be added without repeating the 0.3.1
+  compatibility mistake.
+- Paths with whitespace padding inside a segment, such as `"work /rust"` or
+  `"work/ rust"`, are now rejected instead of creating visually ambiguous
+  parallel branches. Leading and trailing whitespace around the complete input
+  is still trimmed by `normalize_path` and `set_tags`.
+- Empty paths are pruned after their last item or descendant is removed.
+  Querying such a path now returns `Error::PathNotFound` instead of `Ok([])`;
+  detached arena storage is reused by later paths.
+- Moving a subtree to the root now assigns an affected item to the untagged
+  root only when the item has no other tags. Previously an item with another
+  tag could remain directly assigned to both that tag and the root, causing
+  `untagged_item_count` to include a tagged item.
+- `TagTree` adds `len`, `is_empty`, and `contains_item`. `TagTreeSummary` now
+  implements `Clone`, `PartialEq`, and `Eq`.
+- `items_under`, `move_subtree`, and `remove_subtree` now return items in
+  ascending order. Version 0.3 used descending order, which embedded an
+  application-specific preference in the general-purpose interface. The `Ord`
+  bound remains so results stay deterministic.
+- Item-to-path lookup now uses an internal reverse index. This does not change
+  the public result shape, but avoids scanning the complete tree for
+  `tags_for`, `set_tags`, and `remove_item`.
+
 ## 0.3.1
 
 Bug fixes. Two of them are visible to downstream code, so this release is not

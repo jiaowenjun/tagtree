@@ -33,10 +33,24 @@ Add the published crate to your application:
 
 ```toml
 [dependencies]
-tagtree = "0.3"
+tagtree = "0.4"
 ```
 
-The crate requires Rust 1.85 or newer.
+The crate requires Rust 1.88 or newer.
+
+## Project status
+
+The public `TagTree` interface is covered by example-based and model-based
+tests. An internal reverse index keeps item lookups proportional to that item's
+assignments instead of the complete taxonomy; empty paths are pruned and their
+storage is reused. Reproducible benchmarks track construction, queries,
+updates, churn, snapshots, and subtree mutations across shared and wide
+taxonomies. The crate is suitable for in-memory tag indexes; persistence,
+full-text search, and concurrent mutation are intentionally outside its scope.
+
+See the [roadmap](ROADMAP.md), [testing guide](TESTING.md),
+[performance model](PERFORMANCE.md), and [benchmark guide](BENCHMARKS.md) for
+current guarantees and planned work.
 
 ## Quick start
 
@@ -53,7 +67,7 @@ fn main() -> Result<(), tagtree::Error> {
     tags.set_tags(&7, ["work/rust/async"])?;
 
     assert_eq!(tags.tags_for(&42), vec!["favorite", "work/rust"]);
-    assert_eq!(tags.items_under("work")?, vec![42, 7]);
+    assert_eq!(tags.items_under("work")?, vec![7, 42]);
 
     // set_tags replaces all previous tags for this item.
     tags.set_tags(&42, ["personal"])?;
@@ -65,9 +79,10 @@ fn main() -> Result<(), tagtree::Error> {
 
 `set_tags` trims, skips blank values, removes duplicates, validates paths, and
 stores an empty tag list as an untagged item. Items are set-like, so a query
-returns each matching item once. `items_under` returns values in descending
+returns each matching item once. `items_under` returns values in ascending
 order; `T` therefore needs `Eq + Hash + Clone + Ord` for queries and subtree
-mutations.
+mutations. `len`, `is_empty`, and `contains_item` inspect the item index without
+building a tree snapshot.
 
 ## Updating tags
 
@@ -95,7 +110,8 @@ fn main() -> Result<(), tagtree::Error> {
 
 The returned [`ItemTags`](https://docs.rs/tagtree/latest/tagtree/struct.ItemTags.html)
 values contain each affected item and its resulting tags, which is useful for
-updating a database or UI. Removing an unknown item with `remove_item` is a
+updating a database or UI. Affected items are also returned in ascending order.
+Removing an unknown item with `remove_item` is a
 no-op; unknown paths return `Error::PathNotFound`. A rejected mutation leaves
 the tree unchanged. `remove_subtree("")` returns `Error::CannotRemoveRoot`
 because untagged items live at the root path; `move_subtree` uses `""` as the
@@ -104,7 +120,8 @@ destination to strip the leading segment.
 ## Paths
 
 Paths use `/` as the separator. A valid path must not start or end with `/`,
-contain `//`, or contain a blank segment. The empty path (`""`) is the root.
+contain `//`, or contain a blank or whitespace-padded segment. Spaces inside a
+segment are valid. The empty path (`""`) is the root.
 
 The path helpers are available at the crate root and in the [`path`] module:
 

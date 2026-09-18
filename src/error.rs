@@ -2,8 +2,12 @@ use std::fmt;
 
 use crate::path::TagPathError;
 
-/// Errors returned by the public tag-tree and path-tree operations.
+/// Errors returned by tag-tree operations.
+///
+/// This enum is non-exhaustive so callers remain source-compatible when new
+/// error cases are added. Include a wildcard arm when matching it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// A supplied path does not follow the slash-separated path rules.
     InvalidPath(TagPathError),
@@ -14,7 +18,12 @@ pub enum Error {
     /// The root path cannot be removed as a subtree.
     CannotRemoveRoot,
     /// A path cannot be moved into one of its own descendants.
-    CannotMoveIntoDescendant { from: String, to: String },
+    CannotMoveIntoDescendant {
+        /// The subtree path being moved.
+        from: String,
+        /// The rejected destination path.
+        to: String,
+    },
 }
 
 impl fmt::Display for Error {
@@ -31,7 +40,14 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidPath(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 impl From<TagPathError> for Error {
     fn from(error: TagPathError) -> Self {

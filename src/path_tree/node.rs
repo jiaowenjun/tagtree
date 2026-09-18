@@ -51,6 +51,14 @@ impl<T: Eq + Hash> Node<T> {
         self.child_ids.iter()
     }
 
+    pub fn has_children(&self) -> bool {
+        !self.child_ids.is_empty()
+    }
+
+    pub fn take_children(&mut self) -> HashSet<NodeId> {
+        std::mem::take(&mut self.child_ids)
+    }
+
     /// 【子节点管理】关联子节点
     pub fn link_child(&mut self, child_id: NodeId) {
         self.child_ids.insert(child_id);
@@ -77,13 +85,13 @@ impl<T: Eq + Hash> Node<T> {
     }
 
     /// 【背包操作】添加数据项到背包
-    pub fn add_item(&mut self, item: T) {
-        self.bag.insert(item);
+    pub fn add_item(&mut self, item: T) -> bool {
+        self.bag.insert(item)
     }
 
     /// 【背包操作】从背包删除数据项
-    pub fn remove_item(&mut self, item: &T) {
-        self.bag.remove(item);
+    pub fn remove_item(&mut self, item: &T) -> bool {
+        self.bag.remove(item)
     }
 
     /// 【背包操作】遍历背包中的数据项（不含子节点）
@@ -91,7 +99,7 @@ impl<T: Eq + Hash> Node<T> {
         self.bag.iter()
     }
 
-    /// 【背包操作】是否包含某个数据项
+    #[cfg(test)]
     pub fn contains(&self, item: &T) -> bool {
         self.bag.contains(item)
     }

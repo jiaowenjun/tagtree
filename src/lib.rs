@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! Organize application data with hierarchical, slash-separated tags.
 //!
 //! `tagtree` is useful for bookmarks, documents, tasks, notes, and other items
@@ -5,11 +7,11 @@
 //! when the library should keep each item's complete tag assignment in sync:
 //!
 //! ```
-//! use tagtree::{normalize_paths, TagTree};
+//! use tagtree::TagTree;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let mut tree = TagTree::<u64>::new();
-//! tree.set_tags(&42, normalize_paths(["work/rust", "favorite"])?)?;
+//! tree.set_tags(&42, ["work/rust", "favorite"])?;
 //!
 //! assert_eq!(tree.items_under("work")?, vec![42]);
 //! assert_eq!(tree.tags_for(&42), vec!["favorite", "work/rust"]);

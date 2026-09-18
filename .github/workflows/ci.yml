@@ -15,8 +15,14 @@ env:
 
 jobs:
   check:
-    name: Check
+    name: Check (Rust ${{ matrix.toolchain }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - 1.88.0
+          - stable
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -24,7 +30,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
 
       - name: Check formatting
@@ -35,3 +41,21 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Check rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --locked
+
+      - name: Compile benchmarks
+        run: cargo bench --no-run --locked
+
+  semver:
+    name: Check SemVer against crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Check release compatibility
+        uses: obi1kenobi/cargo-semver-checks-action@v2

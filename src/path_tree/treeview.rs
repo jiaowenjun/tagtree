@@ -102,9 +102,9 @@ impl TagNode {
 
         if !self.children.is_empty() {
             let new_prefix = if is_last {
-                format!("{}    ", prefix)
+                format!("{prefix}    ")
             } else {
-                format!("{}│   ", prefix)
+                format!("{prefix}│   ")
             };
 
             for (i, child) in self.children.iter().enumerate() {

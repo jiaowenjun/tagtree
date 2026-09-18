@@ -39,8 +39,9 @@ fn is_descendant_path(candidate: &str, ancestor: &str) -> bool {
 /// ## Path rules
 ///
 /// - Paths use `/` as the separator, for example `"work/project/urgent"`.
-/// - Empty segments are ignored while traversing paths, so `"a//b"` behaves
-///   like `"a/b"`.
+/// - Internal traversal ignores empty segments so validation and mutation
+///   prechecks use the same structure. The public `TagTree` interface rejects
+///   such paths before they reach this module.
 /// - The empty path `""` addresses the root node.
 ///
 /// ## Item requirements
@@ -51,6 +52,10 @@ pub(crate) struct PathTree<T> {
     arena: Vec<Node<T>>,
     /// (ParentID, ChildName) -> ChildID
     child_index: HashMap<(NodeId, String), NodeId>,
+    /// Item -> directly assigned node IDs.
+    item_nodes: HashMap<T, HashSet<NodeId>>,
+    /// Detached empty arena slots available for reuse.
+    free_node_ids: Vec<NodeId>,
 }
 
 /// Internal path tree storage for [`crate::TagTree`].
@@ -63,6 +68,8 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
         Self {
             arena: vec![Node::new_root(root_label)],
             child_index: HashMap::new(),
+            item_nodes: HashMap::new(),
+            free_node_ids: Vec::new(),
         }
     }
 
@@ -89,24 +96,46 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
                 to: new_path.to_string(),
             });
         }
+        let old_parent_id = self.get_parent_id(old_node_id);
         let new_node_id = self.make_by_path(new_path);
-        self.merge(old_node_id, new_node_id)
+        self.merge(old_node_id, new_node_id)?;
+        self.prune_empty_ancestors(old_parent_id);
+        Ok(())
     }
 
     /// Adds an item to one or more paths, creating missing paths as needed.
     pub(crate) fn add_to_paths(&mut self, item: &T, paths: &[String]) {
         for path in paths {
             let node_id = self.make_by_path(path);
-            self.get_node_mut(node_id).add_item(item.clone());
+            if self.get_node_mut(node_id).add_item(item.clone()) {
+                self.item_nodes
+                    .entry(item.clone())
+                    .or_default()
+                    .insert(node_id);
+            }
         }
     }
 
     /// Removes an item from the listed paths.
     pub(crate) fn remove_from_paths(&mut self, item: &T, paths: &[String]) {
         for path in paths {
-            if let Some(node_id) = self.find_by_path(path) {
-                self.get_node_mut(node_id).remove_item(item);
+            let Some(node_id) = self.find_by_path(path) else {
+                continue;
+            };
+            if !self.get_node_mut(node_id).remove_item(item) {
+                continue;
             }
+
+            let remove_item_entry = if let Some(node_ids) = self.item_nodes.get_mut(item) {
+                node_ids.remove(&node_id);
+                node_ids.is_empty()
+            } else {
+                false
+            };
+            if remove_item_entry {
+                self.item_nodes.remove(item);
+            }
+            self.prune_empty_ancestors(node_id);
         }
     }
 
@@ -130,20 +159,13 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
 
     /// Returns all paths containing `item`, sorted lexicographically.
     pub(crate) fn paths_for(&self, item: &T) -> Vec<String> {
-        let mut paths = Vec::new();
-        let mut stack = vec![ROOT_ID];
-
-        while let Some(curr_id) = stack.pop() {
-            let node = self.get_node(curr_id);
-
-            if node.contains(item) {
-                paths.push(self.get_node_path(curr_id));
-            }
-
-            for &child_id in node.iter_children() {
-                stack.push(child_id);
-            }
-        }
+        let mut paths = self
+            .item_nodes
+            .get(item)
+            .into_iter()
+            .flatten()
+            .map(|&node_id| self.get_node_path(node_id))
+            .collect::<Vec<_>>();
 
         paths.sort();
         paths
@@ -178,6 +200,14 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     /// Returns the number of items attached directly to the root.
     pub(crate) fn root_item_count(&self) -> usize {
         self.get_node(ROOT_ID).iter_bag().count()
+    }
+
+    pub(crate) fn item_count(&self) -> usize {
+        self.item_nodes.len()
+    }
+
+    pub(crate) fn contains_item(&self, item: &T) -> bool {
+        self.item_nodes.contains_key(item)
     }
 }
 
@@ -347,6 +377,10 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
     }
 
     fn alloc_id(&mut self, node: Node<T>) -> NodeId {
+        if let Some(node_id) = self.free_node_ids.pop() {
+            self.arena[node_id] = node;
+            return node_id;
+        }
         let next_id = self.arena.len();
         self.arena.push(node);
         next_id
@@ -373,6 +407,26 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
         true
     }
 
+    fn recycle_node(&mut self, node_id: NodeId) {
+        debug_assert!(!self.is_root(node_id));
+        debug_assert!(self.get_node(node_id).is_empty());
+        debug_assert!(!self.get_node(node_id).has_children());
+        debug_assert!(!self.free_node_ids.contains(&node_id));
+        self.free_node_ids.push(node_id);
+    }
+
+    fn prune_empty_ancestors(&mut self, mut node_id: NodeId) {
+        while !self.is_root(node_id)
+            && self.get_node(node_id).is_empty()
+            && !self.get_node(node_id).has_children()
+        {
+            let parent_id = self.get_parent_id(node_id);
+            self.unlink(node_id);
+            self.recycle_node(node_id);
+            node_id = parent_id;
+        }
+    }
+
     fn merge(&mut self, src_id: NodeId, target_id: NodeId) -> Result<()> {
         if src_id == target_id {
             return Ok(());
@@ -392,7 +446,7 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
         let mut children_to_move = Vec::new();
         let mut children_to_merge = Vec::new();
 
-        for &src_child_id in self.get_node(src_id).iter_children() {
+        for src_child_id in self.get_node_mut(src_id).take_children() {
             if let Some(target_child_id) =
                 self.find_child_id(target_id, self.get_node_name(src_child_id))
             {
@@ -403,6 +457,14 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
         }
 
         let src_bag = self.get_node_mut(src_id).take_bag();
+        for item in &src_bag {
+            let node_ids = self
+                .item_nodes
+                .get_mut(item)
+                .expect("source bag item should exist in the reverse index");
+            node_ids.remove(&src_id);
+            node_ids.insert(target_id);
+        }
         self.get_node_mut(target_id).merge_bag(src_bag);
 
         for src_child_id in children_to_move {
@@ -419,6 +481,8 @@ impl<T: Eq + Hash + Clone> PathTree<T> {
         for (src_child_id, target_child_id) in children_to_merge {
             self.merge(src_child_id, target_child_id)?;
         }
+
+        self.recycle_node(src_id);
 
         Ok(())
     }
@@ -580,8 +644,27 @@ mod tests {
         tree.add_to_paths(&1, &["work".to_string()]);
         tree.remove_from_paths(&1, &["work".to_string()]);
 
-        let items = tree.items_under("work").unwrap();
-        assert_eq!(items.len(), 0);
+        assert!(matches!(
+            tree.items_under("work"),
+            Err(Error::PathNotFound(path)) if path == "work"
+        ));
+    }
+
+    #[test]
+    fn test_pruned_nodes_reuse_arena_slots() {
+        let mut tree = PathTree::<usize>::new("tags");
+        tree.add_to_paths(&1, &["revision/0000".to_string()]);
+        let peak_arena_len = tree.arena.len();
+
+        for revision in 1..100 {
+            let old_path = format!("revision/{:04}", revision - 1);
+            let new_path = format!("revision/{revision:04}");
+            tree.replace_paths(&1, &[old_path], &[new_path]);
+        }
+
+        assert_eq!(tree.arena.len(), peak_arena_len);
+        assert_eq!(tree.paths_for(&1), vec!["revision/0099"]);
+        assert!(tree.free_node_ids.is_empty());
     }
 
     #[test]

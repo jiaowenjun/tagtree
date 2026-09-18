@@ -9,16 +9,20 @@ use crate::{
 /// An item's current tags returned after a subtree mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemTags<T> {
+    /// The affected item.
     pub item: T,
+    /// The item's complete normalized tag set after the mutation.
     pub tags: Vec<String>,
 }
 
 /// A read-only summary of a tag tree.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagTreeSummary {
+    /// The root of the owned tree snapshot.
     pub root: TagNode,
     /// Number of paths with directly assigned items, including the root.
     pub populated_path_count: usize,
+    /// Number of items assigned directly to the untagged root.
     pub untagged_item_count: usize,
 }
 
@@ -29,6 +33,7 @@ pub struct TagTree<T> {
 }
 
 impl<T: Eq + Hash + Clone> TagTree<T> {
+    /// Creates an empty tag index.
     pub fn new() -> Self {
         Self {
             tree: PathTree::new(""),
@@ -64,6 +69,21 @@ impl<T: Eq + Hash + Clone> TagTree<T> {
         self.tree.remove_from_paths(item, &old_paths);
     }
 
+    /// Returns the number of distinct items in the index.
+    pub fn len(&self) -> usize {
+        self.tree.item_count()
+    }
+
+    /// Returns whether the index contains no items.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns whether `item` has tagged or untagged membership in the index.
+    pub fn contains_item(&self, item: &T) -> bool {
+        self.tree.contains_item(item)
+    }
+
     /// Returns the item's assigned tags, excluding the untagged root.
     pub fn tags_for(&self, item: &T) -> Vec<String> {
         self.tree
@@ -73,6 +93,7 @@ impl<T: Eq + Hash + Clone> TagTree<T> {
             .collect()
     }
 
+    /// Builds an owned snapshot and aggregate counts for the complete index.
     pub fn summary(&self) -> TagTreeSummary {
         TagTreeSummary {
             root: self.tree.snapshot(),
@@ -83,7 +104,7 @@ impl<T: Eq + Hash + Clone> TagTree<T> {
 }
 
 impl<T: Eq + Hash + Clone + Ord> TagTree<T> {
-    /// Returns items assigned to `path` or any descendant in descending order.
+    /// Returns items assigned to `path` or any descendant in ascending order.
     pub fn items_under(&self, path: &str) -> Result<Vec<T>> {
         validate_path(path)?;
         let mut items = self
@@ -92,20 +113,23 @@ impl<T: Eq + Hash + Clone + Ord> TagTree<T> {
             .into_iter()
             .cloned()
             .collect::<Vec<_>>();
-        items.sort_unstable_by(|left, right| right.cmp(left));
+        items.sort_unstable();
         Ok(items)
     }
 
-    /// Moves a complete tag subtree and returns the resulting tags for affected items.
+    /// Moves a complete tag subtree and returns affected items in ascending order.
     pub fn move_subtree(&mut self, old_path: &str, new_path: &str) -> Result<Vec<ItemTags<T>>> {
         validate_path(old_path)?;
         validate_path(new_path)?;
         let affected_items = self.items_under(old_path)?;
         self.tree.move_subtree(old_path, new_path)?;
+        if new_path.is_empty() {
+            self.remove_redundant_root_assignments(&affected_items);
+        }
         Ok(self.assignments(affected_items))
     }
 
-    /// Removes a tag subtree while preserving unrelated tags.
+    /// Removes a tag subtree and returns affected items in ascending order.
     ///
     /// The root path `""` is rejected because untagged items live there and
     /// removing the root subtree is ambiguous.
@@ -146,6 +170,17 @@ impl<T: Eq + Hash + Clone + Ord> TagTree<T> {
                 item,
             })
             .collect()
+    }
+
+    fn remove_redundant_root_assignments(&mut self, items: &[T]) {
+        let root_path = String::new();
+        for item in items {
+            let paths = self.tree.paths_for(item);
+            if paths.len() > 1 && paths.iter().any(String::is_empty) {
+                self.tree
+                    .remove_from_paths(item, std::slice::from_ref(&root_path));
+            }
+        }
     }
 }
 

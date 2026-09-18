@@ -8,6 +8,8 @@ fn normalize_paths_trims_deduplicates_and_rejects_invalid_paths() {
     assert!(normalize_paths(["/math"]).is_err());
     assert!(normalize_paths(["math/"]).is_err());
     assert!(normalize_paths(["math//algebra"]).is_err());
+    assert!(normalize_paths(["math /algebra"]).is_err());
+    assert!(normalize_paths(["math/ algebra"]).is_err());
 }
 
 #[test]
